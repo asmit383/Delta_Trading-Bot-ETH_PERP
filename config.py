@@ -15,7 +15,7 @@ class Config:
 
     # Realistic Market Params
     SLIPPAGE_PCT       = 0.02 / 100.0  # 0.02% slippage on entry
-    SL_SLIPPAGE_PCT    = 0.03 / 100.0  # 0.03% slippage on SL fill (stop market)
+    SL_SLIPPAGE_PCT    = 0.02 / 100.0  # 0.03% slippage on SL fill (stop market)
     LEVERAGE           = 5.0           # 1x for safe testing, up to 5x later
 
     # Fees (Delta Exchange maker/taker)
