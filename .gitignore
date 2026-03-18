@@ -1,0 +1,10 @@
+secret.py
+.env
+
+data.csv
+trades.csv
+backtest_results.png
+
+__pycache__/
+*.pyc
+.venv/
