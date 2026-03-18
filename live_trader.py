@@ -16,6 +16,16 @@ import hmac
 import hashlib
 import requests
 import logging
+from datetime import datetime, timezone, timedelta
+
+IST = timezone(timedelta(hours=5, minutes=30))
+
+def is_asian_session() -> bool:
+    """Returns True if current IST time is within Asian session (05:30 - 11:30)."""
+    now = datetime.now(IST)
+    start = now.replace(hour=5,  minute=30, second=0, microsecond=0)
+    end   = now.replace(hour=11, minute=30, second=0, microsecond=0)
+    return start <= now <= end
 
 from secret import API_KEY, API_SECRET, ETH_PRODUCT_ID
 from config import Config
@@ -179,6 +189,9 @@ async def _session(in_position: bool, current_candle: dict):
             return
         if current_candle is None or current_candle["start"] != scheduled_candle_start:
             return  # candle already closed before we woke up
+        if not is_asian_session():
+            log.info("Outside Asian session (05:30-11:30 IST) — skipping")
+            return
 
         signal = get_signal(current_candle["open"], current_candle["close"])
         if signal == 0:

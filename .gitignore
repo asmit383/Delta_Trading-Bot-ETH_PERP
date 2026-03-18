@@ -3,7 +3,7 @@ secret.py
 
 data.csv
 trades.csv
-backtest_results.png
+
 
 __pycache__/
 *.pyc

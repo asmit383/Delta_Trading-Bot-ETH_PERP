@@ -1,30 +1,17 @@
 import pandas as pd
-import numpy as np
 from config import Config
 
 def compute_signals(df: pd.DataFrame, cfg: Config) -> pd.DataFrame:
     """
-    Compute entry signals based on strategy logic.
-    Returns the dataframe with a 'signal' column:
-     1 for LONG
-    -1 for SHORT
-     0 for NO SIGNAL
+    Mean-reversion strategy:
+      - Candle body >= REVERSAL_CANDLE_PCT → enter opposite direction at close (market order)
+      - Bullish candle (close > open) → SHORT signal
+      - Bearish candle (close < open) → LONG signal
+    Entry is market order at close price + slippage.
     """
     df = df.copy()
-    
+    body_pct = (df['close'] - df['open']) / df['open']
     df['signal'] = 0
-    
-    # Calculate candle characteristics
-    df['body_pct'] = (df['close'] - df['open']) / df['open']
-    df['body_abs_pct'] = df['body_pct'].abs()
-    
-    # Valid setup if the single candle's body size percentage exceeds the required threshold
-    valid_setup = df['body_abs_pct'] >= cfg.REVERSAL_CANDLE_PCT
-    
-    # Generate signals: Reverse trade logic
-    # If the large candle is positive (Green) -> Take SHORT (-1)
-    # If the large candle is negative (Red) -> Take LONG (1)
-    df.loc[valid_setup & (df['body_pct'] > 0), 'signal'] = -1
-    df.loc[valid_setup & (df['body_pct'] < 0), 'signal'] = 1
-    
+    df.loc[body_pct >=  cfg.REVERSAL_CANDLE_PCT, 'signal'] = -1  # short on big green
+    df.loc[body_pct <= -cfg.REVERSAL_CANDLE_PCT, 'signal'] =  1  # long on big red
     return df

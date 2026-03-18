@@ -2,12 +2,14 @@ import requests
 import pandas as pd
 import time
 
-def fetch_historical_data(symbol="ETHUSDT", resolution="1m", days=14):
+def fetch_historical_data(symbol="ETHUSDT", resolution="1m", days=120):
     url = "https://api.delta.exchange/v2/history/candles"
 
-    # 1-min candles per day = 1440; add small buffer
-    candles_needed = days * 1440
-    limit_per_req  = 2000  # Delta API max
+    # 1-min candles per day = 1440
+    candles_per_day = {"1m": 1440, "5m": 288, "15m": 96, "1h": 24}
+    candles_needed  = days * candles_per_day.get(resolution, 1440)
+    mins_per_candle = {"1m": 1, "5m": 5, "15m": 15, "1h": 60}.get(resolution, 1)
+    limit_per_req   = 2000  # Delta API max
 
     end_time = int(time.time())
     all_candles = []
@@ -15,7 +17,7 @@ def fetch_historical_data(symbol="ETHUSDT", resolution="1m", days=14):
     print(f"Fetching ~{candles_needed} candles ({days} days) for {symbol} at {resolution} resolution...")
 
     while len(all_candles) < candles_needed:
-        current_start = end_time - (limit_per_req * 60)
+        current_start = end_time - (limit_per_req * mins_per_candle * 60)
 
         params = {
             "symbol":     symbol,
@@ -63,7 +65,7 @@ def fetch_historical_data(symbol="ETHUSDT", resolution="1m", days=14):
     df = df.drop_duplicates(subset=['time'])
     df = df.sort_values('timestamp').reset_index(drop=True)
 
-    # Keep only the most recent candles_needed rows
+    # Keep only the most recent candles needed
     df = df.tail(candles_needed).reset_index(drop=True)
 
     df = df[['timestamp', 'open', 'high', 'low', 'close', 'volume']]
@@ -74,4 +76,4 @@ def fetch_historical_data(symbol="ETHUSDT", resolution="1m", days=14):
     print(f"  To   : {df['timestamp'].iloc[-1]}")
 
 if __name__ == "__main__":
-    fetch_historical_data(days=30)
+    fetch_historical_data(days=360)
