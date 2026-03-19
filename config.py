@@ -11,11 +11,11 @@ class Config:
     # Exit Params
     TAKE_PROFIT_PCT    = 0.50 / 100.0
     STOP_LOSS_PCT      = 0.05 / 100.0
-    TIME_EXIT_CANDLES  = 13
+    TIME_EXIT_CANDLES  = 2
 
     # Realistic Market Params
     SLIPPAGE_PCT       = 0.02 / 100.0  # 0.02% slippage on entry
-    SL_SLIPPAGE_PCT    = 0.03 / 100.0  # 0.03% slippage on SL fill (stop market)
+    SL_SLIPPAGE_PCT    = 0.05 / 100.0  # 0.02% slippage on SL fill (stop market)
     LEVERAGE           = 10.0           # 1x for safe testing, up to 5x later
 
     # Fees (Delta Exchange maker/taker)

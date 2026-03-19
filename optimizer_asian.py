@@ -1,6 +1,9 @@
 import pandas as pd
 import numpy as np
 import itertools
+from config import Config
+
+cfg = Config()
 
 # ---- Mean-Reversion Backtest (vectorized) ------------------------------------
 #
@@ -60,7 +63,7 @@ def run_backtest_vec(opens, highs, lows, closes,
                     pnl_pct = (exit_price - entry_price) / entry_price
                 else:
                     pnl_pct = (entry_price - exit_price) / entry_price
-                pnl_pct -= 0.05 / 100.0  # taker entry fee
+                pnl_pct -= cfg.ENTRY_FEE_PCT + cfg.EXIT_FEE_PCT
                 pnl = trade_qty * pnl_pct * entry_price
                 equity += pnl
                 if pnl > 0: wins += 1; gross_profit += pnl
@@ -152,8 +155,8 @@ for rev, tp, sl, te in itertools.product(reversal_pcts, tp_pcts, sl_pcts, time_e
         rev_pct      = rev / 100.0,
         tp_pct       = tp  / 100.0,
         sl_pct       = sl  / 100.0,
-        sl_slip_pct  = 0.03  / 100.0,
-        slippage_pct = 0.02  / 100.0,
+        sl_slip_pct  = cfg.SL_SLIPPAGE_PCT,
+        slippage_pct = cfg.SLIPPAGE_PCT,
         time_exit    = te,
         leverage     = 10.0,
     )

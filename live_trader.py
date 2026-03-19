@@ -1,7 +1,7 @@
 """
 Live Trader — Delta Exchange India
-  Entry  : Market order (next candle open)
-  SL     : Stop-Market  at entry ± STOP_LOSS_PCT
+  Entry  : Fast market order (~200ms), then attach SL/TP separately
+  SL     : Stop-Market at entry ± STOP_LOSS_PCT
   TP     : Limit order  at entry ± TAKE_PROFIT_PCT
   TIME   : Market close after TIME_EXIT_CANDLES candles regardless of P&L
   Signal : Same mean-reversion logic as backtester
@@ -118,35 +118,136 @@ def get_signal(open_: float, close_: float) -> int:
 
 # ── Order placement ───────────────────────────────────────────────────────────
 
-def place_bracket_order(side: str, size: int, entry_price: float) -> dict:
-    if side == "buy":
-        sl_trigger = round(entry_price * (1 - cfg.STOP_LOSS_PCT), 2)
-        tp_price   = round(entry_price * (1 + cfg.TAKE_PROFIT_PCT), 2)
-    else:
-        sl_trigger = round(entry_price * (1 + cfg.STOP_LOSS_PCT), 2)
-        tp_price   = round(entry_price * (1 - cfg.TAKE_PROFIT_PCT), 2)
-
+def place_market_order(side: str, size: int) -> dict:
+    """Step 1: Fast market entry (~200ms). Returns order response with fill price."""
     body = json.dumps({
-        "product_id":                      ETH_PRODUCT_ID,
-        "order_type":                      "market_order",
-        "side":                            side,
-        "size":                            size,
-        "bracket_stop_loss_price":         str(sl_trigger),   # stop market — no limit price
-        "bracket_take_profit_price":       str(tp_price),
-        "bracket_take_profit_limit_price": str(tp_price),
+        "product_id":  ETH_PRODUCT_ID,
+        "order_type":  "market_order",
+        "side":        side,
+        "size":        size,
     })
-
     path = "/v2/orders"
     try:
         resp = session.post(BASE_URL + path, headers=_rest_headers("POST", path, body), data=body, timeout=5)
         return resp.json()
     except Exception as e:
-        log.error(f"Order placement exception: {e}")
+        log.error(f"Market order exception: {e}")
         return {}
 
 
+def attach_sl_tp(side: str, size: int, fill_price: float, retries: int = 3) -> dict:
+    """Step 2: Attach SL (stop-market, exact config distance) + TP (limit) to the open position.
+    Retries up to `retries` times on failure."""
+    sl_distance = cfg.STOP_LOSS_PCT
+    if side == "buy":
+        sl_trigger = round(fill_price * (1 - sl_distance), 2)
+        tp_price   = round(fill_price * (1 + cfg.TAKE_PROFIT_PCT), 2)
+        sl_side    = "sell"
+    else:
+        sl_trigger = round(fill_price * (1 + sl_distance), 2)
+        tp_price   = round(fill_price * (1 - cfg.TAKE_PROFIT_PCT), 2)
+        sl_side    = "buy"
+
+    # Place SL — stop-market order
+    sl_body = json.dumps({
+        "product_id":    ETH_PRODUCT_ID,
+        "order_type":    "market_order",
+        "stop_order_type": "stop_loss_order",
+        "side":          sl_side,
+        "size":          size,
+        "stop_price":    str(sl_trigger),
+        "reduce_only":   True,
+    })
+
+    # Place TP — limit order
+    tp_body = json.dumps({
+        "product_id":  ETH_PRODUCT_ID,
+        "order_type":  "limit_order",
+        "side":        sl_side,
+        "size":        size,
+        "limit_price": str(tp_price),
+        "reduce_only": True,
+    })
+
+    path = "/v2/orders"
+    sl_ok, tp_ok = False, False
+    sl_result, tp_result = {}, {}
+
+    for attempt in range(1, retries + 1):
+        try:
+            # SL first — protection is priority
+            if not sl_ok:
+                resp = session.post(BASE_URL + path, headers=_rest_headers("POST", path, sl_body), data=sl_body, timeout=5)
+                sl_result = resp.json()
+                if sl_result.get("success"):
+                    sl_ok = True
+                    log.info(f"SL attached | stop-market @ {sl_trigger} (1.5× = {sl_distance*100:.3f}%) | attempt {attempt}")
+                else:
+                    log.warning(f"SL attach failed (attempt {attempt}/{retries}): {sl_result}")
+
+            # TP after SL is secured
+            if not tp_ok:
+                resp = session.post(BASE_URL + path, headers=_rest_headers("POST", path, tp_body), data=tp_body, timeout=5)
+                tp_result = resp.json()
+                if tp_result.get("success"):
+                    tp_ok = True
+                    log.info(f"TP attached | limit @ {tp_price} ({cfg.TAKE_PROFIT_PCT*100:.2f}%) | attempt {attempt}")
+                else:
+                    log.warning(f"TP attach failed (attempt {attempt}/{retries}): {tp_result}")
+
+            if sl_ok and tp_ok:
+                return {"success": True, "sl": sl_trigger, "tp": tp_price}
+
+        except Exception as e:
+            log.error(f"SL/TP attach exception (attempt {attempt}/{retries}): {e}")
+
+        if attempt < retries:
+            time.sleep(0.3)  # brief pause before retry
+
+    return {"success": sl_ok and tp_ok, "sl_ok": sl_ok, "tp_ok": tp_ok,
+            "sl": sl_result, "tp": tp_result}
+
+
+def cancel_open_orders() -> dict:
+    """Cancel ALL open orders for ETHUSD — cleans up orphan SL/TP after any exit."""
+    path = f"/v2/orders?product_id={ETH_PRODUCT_ID}"
+    try:
+        resp = session.get(BASE_URL + path, headers=_rest_headers("GET", path), timeout=5)
+        data = resp.json()
+    except Exception as e:
+        log.error(f"Fetch open orders exception: {e}")
+        return {}
+
+    if not data.get("success"):
+        log.warning(f"Could not fetch open orders: {data}")
+        return data
+
+    orders = data.get("result", [])
+    if not orders:
+        log.info("No open orders to cancel")
+        return {"success": True, "cancelled": 0}
+
+    cancelled = 0
+    for order in orders:
+        oid = order.get("id")
+        del_path = f"/v2/orders/{oid}"
+        try:
+            resp = session.delete(BASE_URL + del_path, headers=_rest_headers("DELETE", del_path), timeout=5)
+            r = resp.json()
+            if r.get("success"):
+                cancelled += 1
+                log.info(f"Cancelled order {oid} | type={order.get('order_type')} side={order.get('side')}")
+            else:
+                log.warning(f"Failed to cancel order {oid}: {r}")
+        except Exception as e:
+            log.error(f"Cancel order {oid} exception: {e}")
+
+    log.info(f"Cancelled {cancelled}/{len(orders)} open orders")
+    return {"success": True, "cancelled": cancelled}
+
+
 def close_position(side: str, size: int) -> dict:
-    """Market close — opposite side, reduce_only. Also cancels bracket orders."""
+    """Market close — opposite side, reduce_only. Then cancel all open orders (SL/TP)."""
     close_side = "sell" if side == "buy" else "buy"
     body = json.dumps({
         "product_id":  ETH_PRODUCT_ID,
@@ -158,10 +259,14 @@ def close_position(side: str, size: int) -> dict:
     path = "/v2/orders"
     try:
         resp = session.post(BASE_URL + path, headers=_rest_headers("POST", path, body), data=body, timeout=5)
-        return resp.json()
+        result = resp.json()
     except Exception as e:
         log.error(f"Close position exception: {e}")
         return {}
+
+    # Always cancel orphan SL/TP after closing
+    cancel_open_orders()
+    return result
 
 
 # ── WS session ────────────────────────────────────────────────────────────────
@@ -189,10 +294,6 @@ async def _session(in_position: bool, current_candle: dict):
             return
         if current_candle is None or current_candle["start"] != scheduled_candle_start:
             return  # candle already closed before we woke up
-        if not is_asian_session():
-            log.info("Outside Asian session (05:30-11:30 IST) — skipping")
-            return
-
         signal = get_signal(current_candle["open"], current_candle["close"])
         if signal == 0:
             log.info(f"T-400ms check: body < {cfg.REVERSAL_CANDLE_PCT*100:.2f}% — no trade")
@@ -201,31 +302,33 @@ async def _session(in_position: bool, current_candle: dict):
         traded_candle_start = scheduled_candle_start
         t_signal    = time.time()
         side        = "buy" if signal == 1 else "sell"
-        entry_price = current_candle["close"]
         size        = cfg.ORDER_SIZE
 
-        if side == "buy":
-            sl_p = round(entry_price * (1 - cfg.STOP_LOSS_PCT), 2)
-            tp_p = round(entry_price * (1 + cfg.TAKE_PROFIT_PCT), 2)
-        else:
-            sl_p = round(entry_price * (1 + cfg.STOP_LOSS_PCT), 2)
-            tp_p = round(entry_price * (1 - cfg.TAKE_PROFIT_PCT), 2)
+        log.info(f"T-400ms Signal: {'LONG' if signal == 1 else 'SHORT'} | "
+                 f"entry≈{current_candle['close']} | contracts={size}")
 
-        log.info(f"T-300ms Signal: {'LONG' if signal == 1 else 'SHORT'} | "
-                 f"entry≈{entry_price} | SL={sl_p} | TP={tp_p} | contracts={size}")
-
-        result = place_bracket_order(side, size, entry_price)
+        # Step 1: Fast market entry
+        result = place_market_order(side, size)
         t_order = time.time()
 
-        if result.get("success"):
-            in_position  = True
-            candle_count = 0
-            trade_side   = side
-            trade_size   = size
-            log.info(f"Bracket order placed | id={result['result']['id']} | "
-                     f"delay={t_order - t_signal:.3f}s")
-        else:
-            log.error(f"Order failed: {result}")
+        if not result.get("success"):
+            log.error(f"Market order failed: {result}")
+            return
+
+        order_data = result.get("result", {})
+        fill_price = float(order_data.get("average_fill_price") or current_candle["close"])
+        log.info(f"Market order filled | id={order_data.get('id')} | "
+                 f"fill={fill_price} | delay={t_order - t_signal:.3f}s")
+
+        in_position  = True
+        candle_count = 0
+        trade_side   = side
+        trade_size   = size
+
+        # Step 2: Attach SL (stop-market) + TP (limit) with retry
+        sl_tp = attach_sl_tp(side, size, fill_price)
+        if not sl_tp.get("success"):
+            log.error(f"SL/TP attach incomplete: {sl_tp} — POSITION IS UNPROTECTED")
 
     # ── WS connection ─────────────────────────────────────────────────────────
     async with websockets.connect(WS_URL) as ws:
@@ -259,7 +362,9 @@ async def _session(in_position: bool, current_candle: dict):
                 state = order.get("state", "")
                 if state in ("closed", "cancelled") and in_position:
                     reason = order.get("close_reason", "unknown")
-                    log.info(f"Position closed | reason={reason} | ready for next signal")
+                    log.info(f"Position closed | reason={reason} | cancelling remaining orders...")
+                    cancel_open_orders()
+                    log.info("Ready for next signal")
                     in_position  = False
                     candle_count = 0
                     trade_side   = None
@@ -305,10 +410,10 @@ async def _session(in_position: bool, current_candle: dict):
                             trade_side   = None
                             trade_size   = 0
 
-                    # Schedule T-300ms check for the new candle
+                    # Schedule T-1s check for the new candle
                     if not in_position:
                         candle_start_unix = new_start / 1_000_000 if new_start > 1e12 else new_start
-                        fire_at = candle_start_unix + 60 - 0.4
+                        fire_at = candle_start_unix + 60 - 1.0
                         check_task = asyncio.create_task(
                             _check_at_t_minus_300(new_start, fire_at)
                         )

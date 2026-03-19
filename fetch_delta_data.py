@@ -76,4 +76,4 @@ def fetch_historical_data(symbol="ETHUSDT", resolution="1m", days=120):
     print(f"  To   : {df['timestamp'].iloc[-1]}")
 
 if __name__ == "__main__":
-    fetch_historical_data(days=60)
+    fetch_historical_data(days=360)
