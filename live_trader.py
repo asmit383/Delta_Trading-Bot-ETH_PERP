@@ -195,7 +195,7 @@ async def _session(in_position: bool, current_candle: dict):
 
         signal = get_signal(current_candle["open"], current_candle["close"])
         if signal == 0:
-            log.info("T-300ms check: body < 0.17% — no trade")
+            log.info(f"T-400ms check: body < {cfg.REVERSAL_CANDLE_PCT*100:.2f}% — no trade")
             return
 
         traded_candle_start = scheduled_candle_start

@@ -7,6 +7,7 @@ import itertools
 # Signal: candle body >= reversal_pct → enter opposite direction at close + slippage
 # Entry = market order (taker fee), SL = stop-market + slippage, TP = limit
 # TIME exit after time_exit candles
+# DATA FILTERED TO ASIAN SESSION (05:30 - 11:30 IST) ONLY
 
 def run_backtest_vec(opens, highs, lows, closes,
                      rev_pct, tp_pct, sl_pct, sl_slip_pct, slippage_pct,
@@ -109,23 +110,33 @@ def run_backtest_vec(opens, highs, lows, closes,
     }
 
 
-# ---- Load Data ---------------------------------------------------------------
+# ---- Load Data & Filter to Asian Session (05:30 - 11:30 IST) ----------------
 print("Loading data...")
 df_raw = pd.read_csv("data.csv")
-if 'timestamp' in df_raw.columns:
-    df_raw['timestamp'] = pd.to_datetime(df_raw['timestamp'])
-    df_raw = df_raw.sort_values('timestamp').reset_index(drop=True)
+df_raw['timestamp'] = pd.to_datetime(df_raw['timestamp'])
+df_raw = df_raw.sort_values('timestamp').reset_index(drop=True)
 
-opens  = df_raw['open'].values.astype(np.float64)
-highs  = df_raw['high'].values.astype(np.float64)
-lows   = df_raw['low'].values.astype(np.float64)
-closes = df_raw['close'].values.astype(np.float64)
+# Convert UTC to IST and filter
+df_raw['ist_time'] = df_raw['timestamp'] + pd.Timedelta(hours=5, minutes=30)
+df_raw['ist_hour'] = df_raw['ist_time'].dt.hour + df_raw['ist_time'].dt.minute / 60.0
+
+# Asian session: 05:30 IST (5.5) to 11:30 IST (11.5)
+mask = (df_raw['ist_hour'] >= 5.5) & (df_raw['ist_hour'] < 11.5)
+df_asian = df_raw[mask].reset_index(drop=True)
+
+print(f"Total candles: {len(df_raw)} | Asian session candles: {len(df_asian)} "
+      f"({len(df_asian)/len(df_raw)*100:.1f}%)")
+
+opens  = df_asian['open'].values.astype(np.float64)
+highs  = df_asian['high'].values.astype(np.float64)
+lows   = df_asian['low'].values.astype(np.float64)
+closes = df_asian['close'].values.astype(np.float64)
 
 # ---- Parameter Grid ----------------------------------------------------------
 reversal_pcts = [0.10, 0.15, 0.17, 0.20, 0.25, 0.30, 0.40, 0.50]
 tp_pcts       = [0.10, 0.15, 0.20, 0.25, 0.30, 0.40, 0.50]
 sl_pcts       = [0.05, 0.08, 0.10, 0.12, 0.15, 0.20]
-time_exits    = [2, 3, 5, 7]
+time_exits    = [2, 3, 5, 7, 10, 13]
 
 total = len(reversal_pcts) * len(tp_pcts) * len(sl_pcts) * len(time_exits)
 print(f"Total combinations: {total}")
@@ -144,6 +155,7 @@ for rev, tp, sl, te in itertools.product(reversal_pcts, tp_pcts, sl_pcts, time_e
         sl_slip_pct  = 0.03  / 100.0,
         slippage_pct = 0.02  / 100.0,
         time_exit    = te,
+        leverage     = 10.0,
     )
     if res:
         results.append({'reversal_pct': rev, 'tp_pct': tp, 'sl_pct': sl, 'time_exit': te, **res})
@@ -155,12 +167,12 @@ pd.set_option('display.float_format', '{:.4f}'.format)
 pd.set_option('display.max_columns', None)
 pd.set_option('display.width', 220)
 
-print("=== TOP 15 CONFIGURATIONS ===")
+print("=== TOP 15 ASIAN SESSION CONFIGURATIONS ===")
 print(df_res.head(15).to_string(index=False))
 
 best = df_res.iloc[0]
 print(f"""
-=== BEST CONFIG TO PLUG INTO config.py ===
+=== BEST ASIAN SESSION CONFIG ===
 
   REVERSAL_CANDLE_PCT = {best['reversal_pct']:.2f} / 100.0
   TAKE_PROFIT_PCT     = {best['tp_pct']:.2f} / 100.0

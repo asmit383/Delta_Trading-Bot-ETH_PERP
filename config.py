@@ -19,7 +19,7 @@ class Config:
     LEVERAGE           = 10.0           # 1x for safe testing, up to 5x later
 
     # Fees (Delta Exchange maker/taker)
-    ENTRY_FEE_PCT = 0.05 / 100.0  # maker limit order = 0% fee
+    ENTRY_FEE_PCT = 0.05 / 100.0  # taker market order fee
     EXIT_FEE_PCT  = 0.00  / 100.0
 
     # Initial Capital
